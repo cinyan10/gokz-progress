@@ -3,6 +3,8 @@
 
 A SourceMod plugin for GOKZ that shows real-time map progress and ranking for each player using replay tick data.
 
+![image](image.png)
+
 ### 🚀 Features
 
 * Real-time progress tracking based on `.replay` file positions
