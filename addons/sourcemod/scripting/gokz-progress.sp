@@ -633,7 +633,7 @@ public any Native_GetProgressText(Handle plugin, int numParams)
 
     if (showProgress)
     {
-        Format(text, sizeof(text), "%s%sProgress: %.1f%%%%",  // ← 双重转义！
+        Format(text, sizeof(text), "%s%sProgress: %.1f%%%",  // ← 双重转义！
             text, (strlen(text) > 0 ? "\n" : ""), progress * 100.0);
     }
     SetNativeString(bufferIndex, text, maxlen, true);

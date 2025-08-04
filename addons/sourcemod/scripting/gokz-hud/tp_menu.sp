@@ -166,10 +166,13 @@ static void ShowPanel(KZPlayer player, HUDInfo info)
 {
     char panelTitle[256];
     panelTitle[0] = '\0'; // Initialize as empty
+ 	
+	// Use spectated player's progress if applicable
+    int target = (player.ObserverTarget != -1 && IsClientInGame(player.ObserverTarget)) ? player.ObserverTarget : player.ID;
 
     // 1. Progress information
     char progressText[128];
-    GetProgressText(player.ID, progressText, sizeof(progressText));
+    GetProgressText(target, progressText, sizeof(progressText));
     strcopy(panelTitle, sizeof(panelTitle), progressText);
 
     // 2. Spectator List
@@ -218,9 +221,11 @@ static void TPMenuSetTitle(KZPlayer player, Menu menu, HUDInfo info)
     char title[256];
     title[0] = '\0'; // Initialize as empty
 
-    // 1. Progress information（从 Native 获取格式化后的文本）
+    int target = (player.ObserverTarget != -1 && IsClientInGame(player.ObserverTarget)) ? player.ObserverTarget : player.ID;
+
+    // 1. Progress information
     char progressText[128];
-    GetProgressText(player.ID, progressText, sizeof(progressText));
+    GetProgressText(target, progressText, sizeof(progressText));
     strcopy(title, sizeof(title), progressText);
 
     // 2. Spectator info (append)
