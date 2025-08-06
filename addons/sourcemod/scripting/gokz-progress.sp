@@ -54,16 +54,24 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
     return APLRes_Success;
 }
 
+/* ----------- Events ------------*/
+
 public void OnPluginStart()
 {
     gCvarIncludeBots = CreateConVar("gokz_progress_include_bots", "0", "Include bots in ranking", FCVAR_NONE, true, 0.0, true, 1.0);
     HookConVarChange(gCvarIncludeBots, OnIncludeBotsChanged);
     RegConsoleCmd("sm_rank", Command_ToggleRank);
-    RegConsoleCmd("sm_progress", Command_ToggleProgress);  // 已使用 sm_progress 显示菜单的话改名 sm_progress_pref
+    RegConsoleCmd("sm_progress", Command_ToggleProgress);
     RegConsoleCmd("sm_progressmenu", Cmd_ShowProgress);
     gRankDisplayCookie = RegClientCookie("show_rank", "Show rank in progress menu", CookieAccess_Public);
     gProgressDisplayCookie = RegClientCookie("show_progress", "Show progress in progress menu", CookieAccess_Public);
     gTickPositions = new ArrayList(3);
+    RestartProgressUpdater();
+}
+
+public void OnMapStart()
+{
+    RestartProgressUpdater();
 }
 
 public void OnIncludeBotsChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -121,12 +129,42 @@ public void GOKZ_OnTimerEnd_Post(int client, int course)
     gProgressStatus[client] = Progress_Finished;
     gProgressValues[client] = 1.0; // 强制100%
 
-    int score = RoundToNearest(gProgressValues[client] * 100.0);
+    int score = RoundToNearest(gProgressValues[client] * 1000.0);
     CS_SetClientContributionScore(client, score);
     RebuildProgressClientList();
 }
 
-public void OnMapStart()
+public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
+    int client = GetClientOfUserId(GetEventInt(event, "userid"));
+    if (!IsValidClient(client)) return;
+    CreateTimer(0.2, Timer_ShowMenuHeader, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public void OnClientDisconnect(int client)
+{
+    g_IsProcessing[client] = false;
+    RebuildProgressClientList();
+}
+
+
+public void OnClientPutInServer(int client)
+{
+    if (!IsValidClient(client))
+        return;
+
+    if (IsFakeClient(client) && gCvarIncludeBots.BoolValue)
+    {
+        gProgressStatus[client] = Progress_Running;
+        gProgressValues[client] = 0.0;
+    }
+
+    RebuildProgressClientList();
+}
+
+/* ---------------Functions----------------*/
+
+void RestartProgressUpdater()
 {
     ResetProgressData();
     char path[256];
@@ -156,36 +194,6 @@ public void OnMapStart()
             gProgressStatus[i] = Progress_Running;
         }
     }
-    
-    RebuildProgressClientList();
-}
-
-
-public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
-{
-    int client = GetClientOfUserId(GetEventInt(event, "userid"));
-    if (!IsValidClient(client)) return;
-    CreateTimer(0.2, Timer_ShowMenuHeader, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
-}
-
-public void OnClientDisconnect(int client)
-{
-    g_IsProcessing[client] = false;
-    RebuildProgressClientList();
-}
-
-
-public void OnClientPutInServer(int client)
-{
-    if (!IsValidClient(client))
-        return;
-
-    if (IsFakeClient(client) && gCvarIncludeBots.BoolValue)
-    {
-        gProgressStatus[client] = Progress_Running;
-        gProgressValues[client] = 0.0;
-    }
-
     RebuildProgressClientList();
 }
 
@@ -310,7 +318,7 @@ public Action Timer_UpdateOnePlayerProgress(Handle timer)
         }
 
         gProgressValues[client] = float(nearestTick) / float(gTickPositions.Length);
-        int score = RoundToNearest(gProgressValues[client] * 100.0);
+        int score = RoundToNearest(gProgressValues[client] * 1000.0);
         CS_SetClientContributionScore(client, score);
     }
 
@@ -601,7 +609,7 @@ public any Native_GetProgressText(Handle plugin, int numParams)
         return 0;
     }
 
-    // 读取 cookie
+    // read cookie
     bool showRank = true;
     bool showProgress = true;
 
@@ -633,9 +641,10 @@ public any Native_GetProgressText(Handle plugin, int numParams)
 
     if (showProgress)
     {
-        Format(text, sizeof(text), "%s%sProgress: %.1f%%%",  // ← 双重转义！
+        Format(text, sizeof(text), "%s%sProgress: %.1f%%%",
             text, (strlen(text) > 0 ? "\n" : ""), progress * 100.0);
     }
+
     SetNativeString(bufferIndex, text, maxlen, true);
     return 1;
 }

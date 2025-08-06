@@ -179,6 +179,99 @@ void ReadReplay(const char[] path)
     delete file;
 }
 
+void ReadReplayHeader2(const char[] path, int &tickCount, char[] mapNameOut, int mapNameSize, int &course)
+{
+    File file = OpenFile(path, "rb");
+    if (file == null) return;
+
+    int magic; file.ReadInt32(magic);
+    int format; file.ReadInt8(format);
+    int type; file.ReadInt8(type); // 0=Run, 1=Jump, 2=Cheater
+
+    int len;
+    char mapName[64];
+
+    if (format == 1)
+    {
+        // Skip GOKZ version
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Map name
+        file.ReadInt8(len);
+        file.ReadString(mapName, sizeof(mapName), len);
+        mapName[len] = '\0';
+
+        // Read course
+        file.ReadInt32(course);
+
+        // Skip mode + style (2x Int32)
+        file.Seek(8, SEEK_CUR);
+
+        // Skip time, teleports, steamID (3x Int32)
+        file.Seek(12, SEEK_CUR);
+
+        // Skip SteamID2
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Skip IP
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Skip alias
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Read tick count
+        file.ReadInt32(tickCount);
+    }
+    else if (format == 2)
+    {
+        // Skip GOKZ version
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Map name
+        file.ReadInt8(len);
+        file.ReadString(mapName, sizeof(mapName), len);
+        mapName[len] = '\0';
+
+        // Skip mapFileSize, ip, timestamp (3x Int32)
+        file.Seek(12, SEEK_CUR);
+
+        // Skip alias
+        file.ReadInt8(len);
+        file.Seek(len, SEEK_CUR);
+
+        // Skip steamid (Int32), mode (Int8), style (Int8), sens (Int32), yaw (Int32), tickrate (Int32)
+        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);
+
+        // Read tick count
+        file.ReadInt32(tickCount);
+
+        // Skip weapon, knife
+        file.Seek(8, SEEK_CUR);
+
+        // If it's a run, read time and course
+        file.Seek(4, SEEK_CUR);
+
+            // Read course
+        file.ReadInt8(course);
+
+    }
+    else
+    {
+        delete file;
+        return;
+    }
+
+    // Copy map name out
+    strcopy(mapNameOut, mapNameSize, mapName);
+
+    delete file;
+}
+
 bool FindBestReplayFilePath(char[] outPath, int maxlen)
 {
     char map[64];
@@ -203,8 +296,13 @@ bool FindBestReplayFilePath(char[] outPath, int maxlen)
         char fullPath[PLATFORM_MAX_PATH];
         Format(fullPath, sizeof(fullPath), "%s%s", dir, fileName);
 
-        int tickCount;
-        ReadReplayHeader(fullPath, tickCount);
+        int tickCount, course;
+        char mapName[64];
+        ReadReplayHeader2(fullPath, tickCount, mapName, sizeof(mapName), course);
+
+        // Must be current map & course 0
+        if (!StrEqual(mapName, map, false) || course != 0)
+            continue;
 
         if (bestTicks == -1 || tickCount < bestTicks)
         {
@@ -215,13 +313,13 @@ bool FindBestReplayFilePath(char[] outPath, int maxlen)
 
     delete files;
 
-    if (bestTicks > 0 && bestTicks <= 30 * 60 * 128)
+    if (bestTicks <= 30 * 60 * 128 && bestTicks > 0)
     {
         strcopy(outPath, maxlen, bestPath);
-        LogMessage("best replay path: %s (%d ticks)", bestPath, bestTicks);
+        LogMessage("Best replay path: %s (tickCount = %d)", bestPath, bestTicks);
         return true;
     }
-    LogMessage("No valid replay (too long or missing)");
+
     return false;
 }
 

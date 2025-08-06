@@ -192,6 +192,20 @@ static void ShowPanel(KZPlayer player, HUDInfo info)
         }
     }
 
+	// Ensure only one visible '%' in final panelTitle
+    int percentCount = 0;
+	for (int i = 0; panelTitle[i] != '\0'; i++)
+	{
+		if (panelTitle[i] == '%')
+		{
+			percentCount++;
+			if (percentCount > 1)
+			{
+				panelTitle[i] = ' ';
+			}
+		}
+	}
+
     // 4. Send panel only if menu not blocking or forced to show
     if ((panelTitle[0] != '\0') && (GetClientMenu(player.ID) == MenuSource_None || gB_MenuShowing[player.ID]))
     {
@@ -239,7 +253,6 @@ static void TPMenuSetTitle(KZPlayer player, Menu menu, HUDInfo info)
     {
         Format(title, sizeof(title), "%s\n%s", title, FormatTimerTextForMenu(player, info));
     }
-
     // 4. Set menu title
     if (title[0] != '\0')
     {
