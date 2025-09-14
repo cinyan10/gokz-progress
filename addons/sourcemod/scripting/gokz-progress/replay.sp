@@ -77,10 +77,10 @@ void ReadReplay(const char[] path)
     }
 
     gTickPositions.Clear();
-    gTickPositions.Resize(tickCount);
 
     if (format == 1)
     {
+        // --- Read format 1 with NO trimming ---
         int len;
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
@@ -92,56 +92,52 @@ void ReadReplay(const char[] path)
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // IP
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
 
-        any tick[7];
+        any   tick[7];
         float pos[3];
 
-        int keepStart = 2 * 128;
-        int keepEnd = 2 * 128;
-        int outputIndex = 0;
-
+        gTickPositions.Resize(tickCount);
         for (int i = 0; i < tickCount; i++) {
             file.Read(tick, 7, 4);
             pos[0] = view_as<float>(tick[0]);
             pos[1] = view_as<float>(tick[1]);
             pos[2] = view_as<float>(tick[2]);
-
-            if (i < keepStart || i >= keepEnd)
-                continue;
             gTickPositions.SetArray(i, pos, 3);
         }
-        gTickPositions.Resize(outputIndex);
 
         delete file;
         return;
     }
     else if (format == 2)
     {
+        // --- Read format 2, then trim first/last 256 ticks ---
         int len;
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
 
-        file.Seek(4 * 3, SEEK_CUR); // mapFileSize, ip, timestamp
+        file.Seek(4 * 3, SEEK_CUR);                  // mapFileSize, ip, timestamp
         file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
-        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR); // steamid, mode, style, sens, yaw, tickrate
+        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);  // steamid, mode, style, sens, yaw, tickrate
         file.ReadInt32(tickCount);
-        file.Seek(4 * 2, SEEK_CUR); // weapon, knife
+        file.Seek(4 * 2, SEEK_CUR);                  // weapon, knife
 
-        int replayType = type; // type 是 replayType
+        int replayType = type;
         if (replayType == 0) {
-            file.Seek(4 + 1 + 4, SEEK_CUR); // time, course, teleports
+            file.Seek(4 + 1 + 4, SEEK_CUR);          // time, course, teleports
         } else if (replayType == 1) {
-            file.Seek(1, SEEK_CUR); // acReason
+            file.Seek(1, SEEK_CUR);                  // acReason
         } else if (replayType == 2) {
             file.Seek(4 + 4 + 4 + 1 + 4 + 4 + 4, SEEK_CUR); // Jump replay block
         }
 
         float prevPos[3] = {0.0, 0.0, 0.0};
 
+        // Collect decoded positions sequentially
+        int actual = 0;
         for (int i = 0; i < tickCount; i++) {
             int deltaFlags; file.ReadInt32(deltaFlags);
 
             if (deltaFlags & 0x2) {
-                int deltaFlags2; file.ReadInt32(deltaFlags2); // currently unused
+                int deltaFlags2; file.ReadInt32(deltaFlags2); // unused now
             }
 
             int tickdata[32];
@@ -156,19 +152,45 @@ void ReadReplay(const char[] path)
             }
 
             float pos[3];
-            pos[0] = view_as<float>(tickdata[7]);  // ORIGIN_X
-            pos[1] = view_as<float>(tickdata[8]);  // ORIGIN_Y
-            pos[2] = view_as<float>(tickdata[9]);  // ORIGIN_Z
+            pos[0] = view_as<float>(tickdata[7]);
+            pos[1] = view_as<float>(tickdata[8]);
+            pos[2] = view_as<float>(tickdata[9]);
 
+            // Early-termination guard
             if (pos[0] == 0.0 && pos[1] == 0.0 && pos[2] == 0.0 &&
                 prevPos[0] == 0.0 && prevPos[1] == 0.0 && prevPos[2] == 0.0) {
                 break;
             }
 
-            gTickPositions.SetArray(i, pos, 3);
+            // Append one element (resize + set)
+            int idx = gTickPositions.Length;
+            gTickPositions.Resize(idx + 1);
+            gTickPositions.SetArray(idx, pos, 3);
+
             prevPos[0] = pos[0];
             prevPos[1] = pos[1];
             prevPos[2] = pos[2];
+            actual++;
+        }
+
+        // Trim first & last 256 ticks safely
+        const int FRONT = 256;
+        const int BACK  = 256;
+
+        if (actual <= FRONT + BACK) {
+            gTickPositions.Resize(0);     // nothing usable
+        } else {
+            int start = FRONT;
+            int end   = actual - BACK;    // exclusive
+            float tmp[3];
+            int outIdx = 0;
+
+            // Compact in-place: copy [start, end) to front
+            for (int i = start; i < end; i++) {
+                gTickPositions.GetArray(i, tmp, 3);
+                gTickPositions.SetArray(outIdx++, tmp, 3);
+            }
+            gTickPositions.Resize(outIdx);
         }
 
         delete file;
@@ -182,27 +204,30 @@ void ReadReplay(const char[] path)
 void ReadReplayHeader2(const char[] path, int &tickCount, char[] mapNameOut, int mapNameSize, int &course)
 {
     File file = OpenFile(path, "rb");
-    if (file == null) return;
+    if (file == null) {
+        tickCount = 0;
+        if (mapNameSize > 0) mapNameOut[0] = '\0';
+        course = 0;
+        return;
+    }
 
-    int magic; file.ReadInt32(magic);
-    int format; file.ReadInt8(format);
-    int type; file.ReadInt8(type); // 0=Run, 1=Jump, 2=Cheater
+    int magic;   file.ReadInt32(magic);
+    int format;  file.ReadInt8(format);
+    int type;    file.ReadInt8(type); // 0=Run, 1=Jump, 2=Cheater
 
-    int len;
-    char mapName[64];
+    // Use a larger local buffer to reduce truncation in practice
+    char mapName[128];
 
     if (format == 1)
     {
         // Skip GOKZ version
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        char tmp[2]; // not used; just consume properly
+        ReadLPString(file, tmp, sizeof(tmp));
 
-        // Map name
-        file.ReadInt8(len);
-        file.ReadString(mapName, sizeof(mapName), len);
-        mapName[len] = '\0';
+        // Map name (safe)
+        ReadLPString(file, mapName, sizeof(mapName));
 
-        // Read course
+        // Read course (Int32 in v1)
         file.ReadInt32(course);
 
         // Skip mode + style (2x Int32)
@@ -212,16 +237,13 @@ void ReadReplayHeader2(const char[] path, int &tickCount, char[] mapNameOut, int
         file.Seek(12, SEEK_CUR);
 
         // Skip SteamID2
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        ReadLPString(file, tmp, sizeof(tmp));
 
         // Skip IP
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        ReadLPString(file, tmp, sizeof(tmp));
 
         // Skip alias
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        ReadLPString(file, tmp, sizeof(tmp));
 
         // Read tick count
         file.ReadInt32(tickCount);
@@ -229,40 +251,37 @@ void ReadReplayHeader2(const char[] path, int &tickCount, char[] mapNameOut, int
     else if (format == 2)
     {
         // Skip GOKZ version
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        char tmp[2];
+        ReadLPString(file, tmp, sizeof(tmp));
 
-        // Map name
-        file.ReadInt8(len);
-        file.ReadString(mapName, sizeof(mapName), len);
-        mapName[len] = '\0';
+        // Map name (safe)
+        ReadLPString(file, mapName, sizeof(mapName));
 
         // Skip mapFileSize, ip, timestamp (3x Int32)
         file.Seek(12, SEEK_CUR);
 
         // Skip alias
-        file.ReadInt8(len);
-        file.Seek(len, SEEK_CUR);
+        ReadLPString(file, tmp, sizeof(tmp));
 
-        // Skip steamid (Int32), mode (Int8), style (Int8), sens (Int32), yaw (Int32), tickrate (Int32)
+        // Skip: steamid(Int32), mode(Int8), style(Int8), sens(Int32), yaw(Int32), tickrate(Int32)
         file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);
 
         // Read tick count
         file.ReadInt32(tickCount);
 
-        // Skip weapon, knife
+        // Skip weapon, knife (2x Int32)
         file.Seek(8, SEEK_CUR);
 
-        // If it's a run, read time and course
+        // Skip time (Int32) then read course (Int8) as per your layout
         file.Seek(4, SEEK_CUR);
-
-            // Read course
         file.ReadInt8(course);
-
     }
     else
     {
         delete file;
+        tickCount = 0;
+        if (mapNameSize > 0) mapNameOut[0] = '\0';
+        course = 0;
         return;
     }
 
@@ -336,4 +355,38 @@ public int GetBestReplayTickCount()
     int tickCount;
     ReadReplayHeader(path, tickCount);
     return tickCount;
+}
+
+// --- Safe reader for len-prefixed strings -----------------------------------
+static bool ReadLPString(File file, char[] out, int outMax)
+{
+    int len;
+    if (!file.ReadInt8(len))        // length prefix (1 byte)
+        return false;
+
+    if (len <= 0) {
+        if (outMax > 0) out[0] = '\0';
+        return true;
+    }
+
+    int toRead = len;
+    if (outMax > 0) {
+        int cap = outMax - 1;                   // leave room for '\0'
+        if (toRead > cap) toRead = cap;
+    } else {
+        toRead = 0;
+    }
+
+    // Read up to our capacity
+    if (toRead > 0)
+        file.ReadString(out, outMax, toRead);
+    if (outMax > 0)
+        out[toRead] = '\0';
+
+    // If the stored string was longer, skip the remainder to keep alignment
+    int skip = len - toRead;
+    if (skip > 0)
+        file.Seek(skip, SEEK_CUR);
+
+    return true;
 }

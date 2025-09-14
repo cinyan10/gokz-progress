@@ -18,7 +18,6 @@ Handle gProgressMenuTimers[MAXPLAYERS + 1];
 float gProgressValues[MAXPLAYERS + 1];
 bool gValidReplayAvailable = true;
 
-// State
 int g_ProgressClients[MAXPLAYERS + 1];
 int g_ProgressClientCount = 0;
 int g_ProgressClientIndex = 0;
@@ -30,10 +29,10 @@ Cookie gProgressDisplayCookie;
 
 enum ProgressStatus
 {
-    Progress_None = 0,   // 未开始
-    Progress_Running,    // 正在进行中
-    Progress_DNF,        // 中途放弃
-    Progress_Finished    // 结束，100%
+    Progress_None = 0,
+    Progress_Running,
+    Progress_DNF,
+    Progress_Finished
 };
 
 ProgressStatus gProgressStatus[MAXPLAYERS + 1];
@@ -43,7 +42,7 @@ public Plugin myinfo =
     name = "gokz-progress",
     author = "Cinyan10",
     description = "show player's progress of current map",
-    version = "1.0"
+    version = "1.0.0"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
@@ -83,7 +82,6 @@ public void OnIncludeBotsChanged(ConVar convar, const char[] oldValue, const cha
     {
         LogMessage("[Progress] gokz_progress_include_bots changed: %d -> %d", oldVal, newVal);
 
-        // 更新所有状态
         for (int i = 1; i <= MaxClients; i++)
         {
             if (!IsClientInGame(i)) continue;
@@ -127,7 +125,7 @@ public void GOKZ_OnTimerEnd_Post(int client, int course)
 
     g_IsProcessing[client] = false;
     gProgressStatus[client] = Progress_Finished;
-    gProgressValues[client] = 1.0; // 强制100%
+    gProgressValues[client] = 1.0;
 
     int score = RoundToNearest(gProgressValues[client] * 1000.0);
     CS_SetClientContributionScore(client, score);
@@ -146,7 +144,6 @@ public void OnClientDisconnect(int client)
     g_IsProcessing[client] = false;
     RebuildProgressClientList();
 }
-
 
 public void OnClientPutInServer(int client)
 {
@@ -172,13 +169,11 @@ void RestartProgressUpdater()
 
     if (!gValidReplayAvailable)
     {
-        LogMessage(" Skipping plugin — no valid replay available.");
+        LogMessage("Skipping plugin — no valid replay available.");
         return;
     }
 
     ReadReplay(path);
-    LogMessage(" Loaded %d ticks from %s", gTickPositions.Length, path);
-
     if (g_ProgressGlobalTimer != null && IsValidHandle(g_ProgressGlobalTimer))
     {
         KillTimer(g_ProgressGlobalTimer);
