@@ -4,38 +4,14 @@
 #include <cstrike>
 #include <clientprefs>
 
+#include "gokz-progress/var.sp"
 #include "gokz-progress/replay.sp"
 #include "gokz-progress/utils.sp"
+#include "gokz-progress/calc.sp"
+#include "gokz-progress/timediff.sp"
 
 #pragma semicolon 1
 #pragma newdecls required
-
-ConVar gCvarIncludeBots;
-
-bool gMenuOpen[MAXPLAYERS + 1];
-Handle gProgressMenus[MAXPLAYERS + 1];
-Handle gProgressMenuTimers[MAXPLAYERS + 1];
-float gProgressValues[MAXPLAYERS + 1];
-bool gValidReplayAvailable = true;
-
-int g_ProgressClients[MAXPLAYERS + 1];
-int g_ProgressClientCount = 0;
-int g_ProgressClientIndex = 0;
-Handle g_ProgressGlobalTimer = null;
-bool g_IsProcessing[MAXPLAYERS + 1];
-
-Cookie gRankDisplayCookie;
-Cookie gProgressDisplayCookie;
-
-enum ProgressStatus
-{
-    Progress_None = 0,
-    Progress_Running,
-    Progress_DNF,
-    Progress_Finished
-};
-
-ProgressStatus gProgressStatus[MAXPLAYERS + 1];
 
 public Plugin myinfo = 
 {
@@ -61,7 +37,7 @@ public void OnPluginStart()
     HookConVarChange(gCvarIncludeBots, OnIncludeBotsChanged);
     RegConsoleCmd("sm_rank", Command_ToggleRank);
     RegConsoleCmd("sm_progress", Command_ToggleProgress);
-    RegConsoleCmd("sm_progressmenu", Cmd_ShowProgress);
+
     gRankDisplayCookie = RegClientCookie("show_rank", "Show rank in progress menu", CookieAccess_Public);
     gProgressDisplayCookie = RegClientCookie("show_progress", "Show progress in progress menu", CookieAccess_Public);
     gTickPositions = new ArrayList(3);
@@ -96,7 +72,6 @@ public void OnIncludeBotsChanged(ConVar convar, const char[] oldValue, const cha
         RebuildProgressClientList();
     }
     PrintToChatAll("[Progress] Bots %s ranking now.", newVal ? "included in" : "excluded from");
-
 }
 
 public void GOKZ_OnTimerStart_Post(int client, int course)
@@ -130,13 +105,6 @@ public void GOKZ_OnTimerEnd_Post(int client, int course)
     int score = RoundToNearest(gProgressValues[client] * 1000.0);
     CS_SetClientContributionScore(client, score);
     RebuildProgressClientList();
-}
-
-public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
-{
-    int client = GetClientOfUserId(GetEventInt(event, "userid"));
-    if (!IsValidClient(client)) return;
-    CreateTimer(0.2, Timer_ShowMenuHeader, GetClientUserId(client), TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public void OnClientDisconnect(int client)
@@ -192,7 +160,6 @@ void RestartProgressUpdater()
     RebuildProgressClientList();
 }
 
-
 /* -------------------Commands--------------------- */
 
 public Action Command_ToggleRank(int client, int args)
@@ -222,34 +189,6 @@ public Action Command_ToggleProgress(int client, int args)
     SetClientCookie(client, gProgressDisplayCookie, value);
 
     GOKZ_PrintToChat(client, true, "Progress display %s", enabled ? "enabled" : "disabled");
-    return Plugin_Handled;
-}
-
-public Action Cmd_ShowProgress(int client, int args)
-{
-    if (!gValidReplayAvailable) return Plugin_Handled;
-    if (!IsClientInGame(client)) return Plugin_Handled;
-
-    if (g_ProgressClientCount == 0)
-    {
-        PrintToChat(client, " No Players in the ranking pool now");
-        return Plugin_Handled;
-    }
-
-    if (gMenuOpen[client])
-    {
-        // Toggle off
-        KillProgressMenuTimer(client);
-        gMenuOpen[client] = false;
-    }
-    else
-    {
-        // Toggle on
-        KillProgressMenuTimer(client); // Ensure stale timer cleared
-        gProgressMenuTimers[client] = CreateTimer(0.1, Timer_UpdateProgressMenu, GetClientUserId(client), TIMER_REPEAT);
-        gMenuOpen[client] = true;
-    }
-
     return Plugin_Handled;
 }
 
@@ -286,10 +225,8 @@ void RebuildProgressClientList()
     g_ProgressClientIndex = 0;
 }
 
-
 public Action Timer_UpdateOnePlayerProgress(Handle timer)
 {
-
     if (g_ProgressClientCount == 0 || gTickPositions == null || gTickPositions.Length <= 0)
         return Plugin_Continue;
 
@@ -297,220 +234,12 @@ public Action Timer_UpdateOnePlayerProgress(Handle timer)
 
     if (IsClientInGame(client) && gProgressStatus[client] == Progress_Running && IsPlayerAlive(client))
     {
-        float pos[3];
-        GetClientAbsOrigin(client, pos);
-
-        int nearestTick = -1;
-        float nearestDist = -1.0, tickPos[3];
-
-        for (int i = 0; i < gTickPositions.Length; i++) {
-            gTickPositions.GetArray(i, tickPos, 3);
-            float dist = GetVectorDistance(pos, tickPos);
-            if (nearestTick == -1 || dist < nearestDist) {
-                nearestTick = i;
-                nearestDist = dist;
-            }
-        }
-
-        gProgressValues[client] = float(nearestTick) / float(gTickPositions.Length);
-        int score = RoundToNearest(gProgressValues[client] * 1000.0);
-        CS_SetClientContributionScore(client, score);
+        GP_UpdateClientProgressAndScore(client);
     }
 
     g_ProgressClientIndex = (g_ProgressClientIndex + 1) % g_ProgressClientCount;
     return Plugin_Continue;
 }
-
-public Action Timer_ShowMenuHeader(Handle timer, any userid)
-{
-    if (!gValidReplayAvailable) return Plugin_Stop;
-
-    int client = GetClientOfUserId(userid);
-    if (!IsValidClient(client) || !IsPlayerAlive(client)) return Plugin_Continue;
-
-    if (gTickPositions.Length <= 0) return Plugin_Stop;
-
-    float clientPos[3];
-    GetClientAbsOrigin(client, clientPos);
-
-    int nearestTick = -1;
-    float nearestDist = -1.0, tickPos[3];
-    for (int i = 0; i < gTickPositions.Length; i++) {
-        gTickPositions.GetArray(i, tickPos, 3);
-        float dist = GetVectorDistance(clientPos, tickPos);
-        if (nearestTick == -1 || dist < nearestDist) {
-            nearestTick = i;
-            nearestDist = dist;
-        }
-    }
-
-    float progress = float(nearestTick) / float(gTickPositions.Length);
-
-    float clientProgress[MAXPLAYERS + 1];
-    int validPlayers[MAXPLAYERS + 1];
-    int total = 0, rank = 1;
-    bool includeBots = gCvarIncludeBots.BoolValue;
-
-    for (int i = 1; i <= MaxClients; i++) {
-        if (!IsValidClient(i)) continue;
-        if (!includeBots && IsFakeClient(i)) continue;
-
-        float pos[3];
-        GetClientAbsOrigin(i, pos);
-
-        int nearest = -1;
-        float minDist = -1.0;
-        for (int j = 0; j < gTickPositions.Length; j++) {
-            gTickPositions.GetArray(j, tickPos, 3);
-            float dist = GetVectorDistance(pos, tickPos);
-            if (nearest == -1 || dist < minDist) {
-                nearest = j;
-                minDist = dist;
-            }
-        }
-
-        float prog = float(nearest) / float(gTickPositions.Length);
-        clientProgress[i] = prog;
-        validPlayers[total++] = i;
-
-        if (i != client && prog > progress)
-            rank++;
-    }
-
-    SortCustom1D(validPlayers, total, SortProgressDesc);
-
-    char buffer[1024];
-    Format(buffer, sizeof(buffer), "\nProgress: %.1f% Rank: %d / %d\n", progress * 100.0, rank, total);
-
-    int idx = -1;
-    for (int i = 0; i < total; i++) {
-        if (validPlayers[i] == client) {
-            idx = i;
-            break;
-        }
-    }
-
-    for (int i = idx - 3; i <= idx + 3; i++) {
-        if (i < 0 || i >= total) continue;
-
-        char name[64];
-        GetClientName(validPlayers[i], name, sizeof(name));
-        Format(buffer, sizeof(buffer), "%s%s%d. %s %.1f%%\n", buffer, (validPlayers[i] == client ? "-> " : ""), i + 1, name, clientProgress[validPlayers[i]] * 100.0);
-    }
-
-    if (gProgressMenus[client] != null && IsValidHandle(gProgressMenus[client]))
-    {
-        SetMenuTitle(gProgressMenus[client], buffer);
-    }
-    return Plugin_Continue;
-}
-
-
-public Action Timer_UpdateProgressMenu(Handle timer, any userid)
-{
-    if (!gValidReplayAvailable) return Plugin_Stop;
-
-    int client = GetClientOfUserId(userid);
-    if (client <= 0 || !IsClientInGame(client)) return Plugin_Stop;
-
-    bool includeBots = gCvarIncludeBots.BoolValue;
-
-    int players[MAXPLAYERS + 1];
-    int count = 0, rank = 1;
-    float myProgress = gProgressValues[client];
-
-    for (int i = 1; i <= MaxClients; i++) {
-        if (!IsValidClient(i)) continue;
-        if (!includeBots && IsFakeClient(i)) continue;
-        if (gProgressStatus[i] == Progress_None) continue;
-
-        players[count++] = i;
-        if (i != client && gProgressValues[i] > myProgress) rank++;
-    }
-
-    // Sort players by progress descending
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = 0; j < count - i - 1; j++) {
-            if (gProgressValues[players[j]] < gProgressValues[players[j + 1]]) {
-                int temp = players[j];
-                players[j] = players[j + 1];
-                players[j + 1] = temp;
-            }
-        }
-    }
-
-    // Find my index
-    int myIndex = -1;
-    for (int i = 0; i < count; i++) {
-        if (players[i] == client) {
-            myIndex = i;
-            break;
-        }
-    }
-
-    // Prepare display list
-    int titleList[10];
-    int titleCount = 0;
-
-    for (int i = 0; i < 2 && i < count; i++) titleList[titleCount++] = players[i];
-    for (int i = myIndex - 2; i < myIndex; i++) {
-        if (i >= 2 && i < count && !IsInArray(players[i], titleList, titleCount))
-            titleList[titleCount++] = players[i];
-    }
-    if (!IsInArray(client, titleList, titleCount))
-        titleList[titleCount++] = client;
-    for (int i = myIndex + 1; i <= myIndex + 2 && i < count; i++) {
-        if (!IsInArray(players[i], titleList, titleCount))
-            titleList[titleCount++] = players[i];
-    }
-    for (int i = count - 2; i < count; i++) {
-        if (i >= 0 && i < count && !IsInArray(players[i], titleList, titleCount))
-            titleList[titleCount++] = players[i];
-    }
-
-    // Build menu string
-    char title[1024];
-    Format(title, sizeof(title), "Progress: %.1f%% Rank: %d / %d\n", myProgress * 100.0, rank, count);
-
-    for (int i = 0; i < count; i++) {
-        int target = players[i];
-        char name[64], state[8] = "", marker[8] = "";
-        GetClientName(target, name, sizeof(name));
-
-        switch (gProgressStatus[target])
-        {
-            case Progress_DNF:
-            {
-                strcopy(state, sizeof(state), "DNF");
-            }
-            case Progress_Finished:
-            {
-                strcopy(state, sizeof(state), "✓");
-            }
-            default:
-            {
-                strcopy(state, sizeof(state), "");
-            }
-        }
-
-        if (target == client) 
-        {
-            strcopy(marker, sizeof(marker), "-> ");
-        }
-
-        Format(title, sizeof(title), "%s%s%2d. %-20s %5.1f%% %s\n",
-            title, marker, i + 1, name, gProgressValues[target] * 100.0, state);
-    }
-
-    Menu menu = new Menu(MenuCloseHandler);
-    menu.SetTitle(title);
-    menu.AddItem(" ", " ");
-    menu.ExitButton = true;
-    menu.Display(client, 10);
-    gProgressMenus[client] = menu;
-    return Plugin_Continue;
-}
-
 
 public int SortProgressDesc(int elem1, int elem2, const int[] array, Handle hndl)
 {
@@ -519,33 +248,6 @@ public int SortProgressDesc(int elem1, int elem2, const int[] array, Handle hndl
     if (a > b) return -1;
     if (a < b) return 1;
     return 0;
-}
-
-public int MenuCloseHandler(Menu menu, MenuAction action, int client, int param)
-{
-    if (action == MenuAction_End)
-    {
-        if (client > 0 && client <= MaxClients && IsClientInGame(client)) {
-            KillProgressMenuTimer(client);
-        }
-    }
-    return 0;
-}
-
-void KillProgressMenuTimer(int client)
-{
-    if (gProgressMenuTimers[client] != null && IsValidHandle(gProgressMenuTimers[client]))
-    {
-        KillTimer(gProgressMenuTimers[client]);
-        gProgressMenuTimers[client] = null;
-    }
-
-    if (gProgressMenus[client] != null && IsValidHandle(gProgressMenus[client]))
-    {
-        delete gProgressMenus[client];
-        gProgressMenus[client] = null;
-    }
-
 }
 
 public any Native_GetOnePlayerProgressStats(Handle plugin, int numParams)
@@ -579,8 +281,7 @@ void ResetProgressData()
         gProgressStatus[i] = Progress_None;
         gProgressValues[i] = 0.0;
         g_IsProcessing[i] = false;
-        gMenuOpen[i] = false;
-        KillProgressMenuTimer(i);
+        // removed menu state resets & KillProgressMenuTimer
     }
 
     g_ProgressClientCount = 0;
