@@ -1,6 +1,9 @@
 #include <sourcemod>
 #include <sdktools>
 #include <gokz/core>
+#include <gokz/localdb>
+#include <gokz/localranks>
+#include <gokz/replays>
 #include <cstrike>
 #include <clientprefs>
 
@@ -37,6 +40,8 @@ public void OnPluginStart()
     HookConVarChange(gCvarIncludeBots, OnIncludeBotsChanged);
     RegConsoleCmd("sm_rank", Command_ToggleRank);
     RegConsoleCmd("sm_progress", Command_ToggleProgress);
+    RegConsoleCmd("sm_timediff", Command_ToggleTimeDiff);   // <-- add
+    TimeDiff_Init();
 
     gRankDisplayCookie = RegClientCookie("show_rank", "Show rank in progress menu", CookieAccess_Public);
     gProgressDisplayCookie = RegClientCookie("show_progress", "Show progress in progress menu", CookieAccess_Public);
@@ -47,6 +52,7 @@ public void OnPluginStart()
 public void OnMapStart()
 {
     RestartProgressUpdater();
+    TimeDiff_OnMapStart();
 }
 
 public void OnIncludeBotsChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -81,6 +87,18 @@ public void GOKZ_OnTimerStart_Post(int client, int course)
     g_IsProcessing[client] = true;
     gProgressStatus[client] = Progress_Running;
     RebuildProgressClientList();
+
+    TimeDiff_OnTimerStart_Post(client, course);
+}
+
+public void GOKZ_OnPause_Post(int client)
+{
+    TimeDiff_OnPause_Post(client);                // <— pause (stop) timer
+}
+
+public void GOKZ_OnResume_Post(int client)
+{
+    TimeDiff_OnResume_Post(client);               // <— resume (start) timer if enabled
 }
 
 public void GOKZ_OnTimerStopped(int client)
@@ -92,6 +110,8 @@ public void GOKZ_OnTimerStopped(int client)
         gProgressStatus[client] = Progress_DNF;
 
     RebuildProgressClientList();
+
+    TimeDiff_OnTimerStopped(client);
 }
 
 public void GOKZ_OnTimerEnd_Post(int client, int course)
@@ -105,12 +125,15 @@ public void GOKZ_OnTimerEnd_Post(int client, int course)
     int score = RoundToNearest(gProgressValues[client] * 1000.0);
     CS_SetClientContributionScore(client, score);
     RebuildProgressClientList();
+
+    TimeDiff_OnTimerEnd_Post(client, course, /*time*/0.0, /*tps*/0); // params not used internally
 }
 
 public void OnClientDisconnect(int client)
 {
     g_IsProcessing[client] = false;
     RebuildProgressClientList();
+    TimeDiff_OnClientDisconnect(client); 
 }
 
 public void OnClientPutInServer(int client)
@@ -125,6 +148,7 @@ public void OnClientPutInServer(int client)
     }
 
     RebuildProgressClientList();
+    TimeDiff_OnClientPutInServer(client);
 }
 
 /* ---------------Functions----------------*/
@@ -168,8 +192,9 @@ public Action Command_ToggleRank(int client, int args)
 
     char value[4];
     GetClientCookie(client, gRankDisplayCookie, value, sizeof(value));
-    bool enabled = (StringToInt(value) == 0);  // 默认关闭，点击后启用
+    bool enabled = (StringToInt(value) == 0);  // If cookie not set or 0, toggle to 1 (enable)
 
+    // store new state
     IntToString(enabled ? 1 : 0, value, sizeof(value));
     SetClientCookie(client, gRankDisplayCookie, value);
 
@@ -306,7 +331,7 @@ public any Native_GetProgressText(Handle plugin, int numParams)
     }
 
     // read cookie
-    bool showRank = true;
+    bool showRank = false;    // default OFF
     bool showProgress = true;
 
     char value[4];

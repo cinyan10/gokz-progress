@@ -48,158 +48,21 @@ void ReadReplayHeader(const char[] path, int &tickCount)
 
 void ReadReplay(const char[] path)
 {
-    File file = OpenFile(path, "rb");
-    if (file == null) {
-        LogMessage(" Failed to open file: %s", path);
-        return;
-    }
+    if (gTickPositions == null)
+        gTickPositions = new ArrayList(3);
 
     LogMessage(" Reading Header from %s", path);
 
-    int magic; file.ReadInt32(magic);
-    if (magic != 0x676F6B7A) {
-        LogMessage(" Invalid magic number: %d", magic);
-        delete file;
-        return;
-    }
-
-    int format; file.ReadInt8(format);
-    int type; file.ReadInt8(type);
-
-    int tickCount;
-    ReadReplayHeader(path, tickCount);
-    LogMessage(" Replay format %d, tickcount: %d", format, tickCount);
-
-    if (tickCount <= 0) {
-        LogMessage(" Invalid tick count");
-        delete file;
-        return;
-    }
-
     gTickPositions.Clear();
+    bool ok = RP_ReadReplayInto(path, gTickPositions);
 
-    if (format == 1)
-    {
-        // --- Read format 1 with NO trimming ---
-        int len;
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
-
-        file.Seek(4 * 3, SEEK_CUR); // course, mode, style
-        file.Seek(4 * 4, SEEK_CUR); // time, teleports, steamid, steamid2
-
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // steamID2
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // IP
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
-
-        any   tick[7];
-        float pos[3];
-
-        gTickPositions.Resize(tickCount);
-        for (int i = 0; i < tickCount; i++) {
-            file.Read(tick, 7, 4);
-            pos[0] = view_as<float>(tick[0]);
-            pos[1] = view_as<float>(tick[1]);
-            pos[2] = view_as<float>(tick[2]);
-            gTickPositions.SetArray(i, pos, 3);
-        }
-
-        delete file;
-        return;
+    if (ok) {
+        LogMessage(" Loaded replay into global route, length=%d", gTickPositions.Length);
+    } else {
+        LogMessage(" Failed to load replay into global route: %s", path);
     }
-    else if (format == 2)
-    {
-        // --- Read format 2, then trim first/last 256 ticks ---
-        int len;
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
-
-        file.Seek(4 * 3, SEEK_CUR);                  // mapFileSize, ip, timestamp
-        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
-        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);  // steamid, mode, style, sens, yaw, tickrate
-        file.ReadInt32(tickCount);
-        file.Seek(4 * 2, SEEK_CUR);                  // weapon, knife
-
-        int replayType = type;
-        if (replayType == 0) {
-            file.Seek(4 + 1 + 4, SEEK_CUR);          // time, course, teleports
-        } else if (replayType == 1) {
-            file.Seek(1, SEEK_CUR);                  // acReason
-        } else if (replayType == 2) {
-            file.Seek(4 + 4 + 4 + 1 + 4 + 4 + 4, SEEK_CUR); // Jump replay block
-        }
-
-        float prevPos[3] = {0.0, 0.0, 0.0};
-
-        // Collect decoded positions sequentially
-        int actual = 0;
-        for (int i = 0; i < tickCount; i++) {
-            int deltaFlags; file.ReadInt32(deltaFlags);
-
-            if (deltaFlags & 0x2) {
-                int deltaFlags2; file.ReadInt32(deltaFlags2); // unused now
-            }
-
-            int tickdata[32];
-            tickdata[7] = view_as<int>(prevPos[0]); // ORIGIN_X
-            tickdata[8] = view_as<int>(prevPos[1]); // ORIGIN_Y
-            tickdata[9] = view_as<int>(prevPos[2]); // ORIGIN_Z
-
-            for (int j = 1; j < 32; j++) {
-                if (deltaFlags & (1 << j)) {
-                    file.ReadInt32(tickdata[j]);
-                }
-            }
-
-            float pos[3];
-            pos[0] = view_as<float>(tickdata[7]);
-            pos[1] = view_as<float>(tickdata[8]);
-            pos[2] = view_as<float>(tickdata[9]);
-
-            // Early-termination guard
-            if (pos[0] == 0.0 && pos[1] == 0.0 && pos[2] == 0.0 &&
-                prevPos[0] == 0.0 && prevPos[1] == 0.0 && prevPos[2] == 0.0) {
-                break;
-            }
-
-            // Append one element (resize + set)
-            int idx = gTickPositions.Length;
-            gTickPositions.Resize(idx + 1);
-            gTickPositions.SetArray(idx, pos, 3);
-
-            prevPos[0] = pos[0];
-            prevPos[1] = pos[1];
-            prevPos[2] = pos[2];
-            actual++;
-        }
-
-        // Trim first & last 256 ticks safely
-        const int FRONT = 256;
-        const int BACK  = 256;
-
-        if (actual <= FRONT + BACK) {
-            gTickPositions.Resize(0);     // nothing usable
-        } else {
-            int start = FRONT;
-            int end   = actual - BACK;    // exclusive
-            float tmp[3];
-            int outIdx = 0;
-
-            // Compact in-place: copy [start, end) to front
-            for (int i = start; i < end; i++) {
-                gTickPositions.GetArray(i, tmp, 3);
-                gTickPositions.SetArray(outIdx++, tmp, 3);
-            }
-            gTickPositions.Resize(outIdx);
-        }
-
-        delete file;
-        return;
-    }
-
-    LogMessage(" Unsupported format %d", format);
-    delete file;
 }
+
 
 void ReadReplayHeader2(const char[] path, int &tickCount, char[] mapNameOut, int mapNameSize, int &course)
 {
@@ -389,4 +252,166 @@ static bool ReadLPString(File file, char[] out, int outMax)
         file.Seek(skip, SEEK_CUR);
 
     return true;
+}
+
+/**
+ * Reads a replay file and fills 'dest' with float[3] positions (one per tick point).
+ * - Supports format 1 (no trimming) and format 2 (trims first/last 256 ticks).
+ * - Returns true on success with at least one point.
+ *
+ * NOTE: This mirrors your ReadReplay() logic but writes into 'dest' instead of gTickPositions.
+ */
+stock bool RP_ReadReplayInto(const char[] path, ArrayList dest)
+{
+    if (dest == null)
+        return false;
+
+    File file = OpenFile(path, "rb");
+    if (file == null) {
+        LogMessage(" Failed to open file: %s", path);
+        return false;
+    }
+
+    int magic; file.ReadInt32(magic);
+    if (magic != 0x676F6B7A) {
+        LogMessage(" Invalid magic number: %d", magic);
+        delete file;
+        return false;
+    }
+
+    int format; file.ReadInt8(format);
+    int type;   file.ReadInt8(type);
+
+    // We need tickCount for format 1 sizing and also for logging.
+    int tickCount;
+    ReadReplayHeader(path, tickCount); // re-opens file internally; harmless but convenient
+
+    if (tickCount <= 0) {
+        LogMessage(" Invalid tick count");
+        delete file;
+        return false;
+    }
+
+    dest.Clear();
+
+    if (format == 1)
+    {
+        // --- Read format 1 with NO trimming ---
+        int len;
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
+
+        file.Seek(4 * 3, SEEK_CUR); // course, mode, style
+        file.Seek(4 * 4, SEEK_CUR); // time, teleports, steamid, steamid2
+
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // steamID2
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // IP
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
+
+        any   tick[7];
+        float pos[3];
+
+        dest.Resize(tickCount);
+        for (int i = 0; i < tickCount; i++) {
+            file.Read(tick, 7, 4);
+            pos[0] = view_as<float>(tick[0]);
+            pos[1] = view_as<float>(tick[1]);
+            pos[2] = view_as<float>(tick[2]);
+            dest.SetArray(i, pos, 3);
+        }
+
+        delete file;
+        return dest.Length > 0;
+    }
+    else if (format == 2)
+    {
+        // --- Read format 2, then trim first/last 256 ticks ---
+        int len;
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // GOKZ version
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // Map name
+
+        file.Seek(4 * 3, SEEK_CUR);                   // mapFileSize, ip, timestamp
+        file.ReadInt8(len); file.Seek(len, SEEK_CUR); // alias
+        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);   // steamid, mode, style, sens, yaw, tickrate
+        file.ReadInt32(tickCount);
+        file.Seek(4 * 2, SEEK_CUR);                   // weapon, knife
+
+        int replayType = type;
+        if (replayType == 0) {
+            file.Seek(4 + 1 + 4, SEEK_CUR);          // time, course, teleports
+        } else if (replayType == 1) {
+            file.Seek(1, SEEK_CUR);                  // acReason
+        } else if (replayType == 2) {
+            file.Seek(4 + 4 + 4 + 1 + 4 + 4 + 4, SEEK_CUR); // Jump replay block
+        }
+
+        float prevPos[3] = {0.0, 0.0, 0.0};
+
+        int actual = 0;
+        for (int i = 0; i < tickCount; i++) {
+            int deltaFlags; file.ReadInt32(deltaFlags);
+
+            if (deltaFlags & 0x2) {
+                int deltaFlags2; file.ReadInt32(deltaFlags2); // unused now
+            }
+
+            int tickdata[32];
+            tickdata[7] = view_as<int>(prevPos[0]); // ORIGIN_X
+            tickdata[8] = view_as<int>(prevPos[1]); // ORIGIN_Y
+            tickdata[9] = view_as<int>(prevPos[2]); // ORIGIN_Z
+
+            for (int j = 1; j < 32; j++) {
+                if (deltaFlags & (1 << j)) {
+                    file.ReadInt32(tickdata[j]);
+                }
+            }
+
+            float pos[3];
+            pos[0] = view_as<float>(tickdata[7]);
+            pos[1] = view_as<float>(tickdata[8]);
+            pos[2] = view_as<float>(tickdata[9]);
+
+            // Early-termination guard
+            if (pos[0] == 0.0 && pos[1] == 0.0 && pos[2] == 0.0 &&
+                prevPos[0] == 0.0 && prevPos[1] == 0.0 && prevPos[2] == 0.0) {
+                break;
+            }
+
+            int idx = dest.Length;
+            dest.Resize(idx + 1);
+            dest.SetArray(idx, pos, 3);
+
+            prevPos[0] = pos[0];
+            prevPos[1] = pos[1];
+            prevPos[2] = pos[2];
+            actual++;
+        }
+
+        // Trim first & last 256 ticks safely
+        const int FRONT = 256;
+        const int BACK  = 256;
+
+        if (actual <= FRONT + BACK) {
+            dest.Resize(0); // nothing usable
+        } else {
+            int start = FRONT;
+            int end   = actual - BACK;    // exclusive
+            float tmp[3];
+            int outIdx = 0;
+
+            // Compact in-place: copy [start, end) to front
+            for (int i = start; i < end; i++) {
+                dest.GetArray(i, tmp, 3);
+                dest.SetArray(outIdx++, tmp, 3);
+            }
+            dest.Resize(outIdx);
+        }
+
+        delete file;
+        return dest.Length > 0;
+    }
+
+    LogMessage(" Unsupported format %d", format);
+    delete file;
+    return false;
 }
