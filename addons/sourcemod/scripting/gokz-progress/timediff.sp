@@ -79,6 +79,25 @@ static void TD_FormatReplayPath(const char[] guid, char[] outPath, int maxlen)
 // Bridge parser: copy from global gTickPositions into a per-player ArrayList after ReadReplay()
 static bool TD_ReadReplayInto(const char[] path, ArrayList dest)
 {
+    // Check replay size limit before loading
+    int tickCount;
+    ReadReplayHeader(path, tickCount);
+    
+    if (tickCount <= 0)
+    {
+        LogMessage("[TimeDiff] Invalid replay file: %s (tickCount: %d)", path, tickCount);
+        return false;
+    }
+    
+    // Check replay size limit (convert minutes to ticks at 128 tickrate)
+    int maxTicks = RoundToFloor(gCvarMaxReplayTime.FloatValue * 60.0 * 128.0);
+    if (tickCount > maxTicks)
+    {
+        LogMessage("[TimeDiff] Replay too large: %s (tickCount: %d, max: %d ticks / %.1f minutes)", 
+            path, tickCount, maxTicks, gCvarMaxReplayTime.FloatValue);
+        return false;
+    }
+    
     ReadReplay(path); // fills global gTickPositions
     if (gTickPositions == null || gTickPositions.Length <= 0)
         return false;

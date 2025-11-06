@@ -1,4 +1,6 @@
 ConVar gCvarIncludeBots;
+ConVar gCvarDebug;
+ConVar gCvarMaxReplayTime;
 
 float gProgressValues[MAXPLAYERS + 1];
 bool gValidReplayAvailable = true;

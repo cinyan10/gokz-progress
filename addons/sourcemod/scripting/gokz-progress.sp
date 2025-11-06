@@ -38,6 +38,8 @@ public void OnPluginStart()
 {
     gCvarIncludeBots = CreateConVar("gokz_progress_include_bots", "0", "Include bots in ranking", FCVAR_NONE, true, 0.0, true, 1.0);
     HookConVarChange(gCvarIncludeBots, OnIncludeBotsChanged);
+    gCvarDebug = CreateConVar("gokz_progress_debug", "0", "Enable debug output for replay loading", FCVAR_NONE, true, 0.0, true, 1.0);
+    gCvarMaxReplayTime = CreateConVar("gokz_progress_max_replay_time", "30", "Maximum replay time in minutes (default: 30)", FCVAR_NONE, true, 1.0, true, 120.0);
     RegConsoleCmd("sm_rank", Command_ToggleRank);
     RegConsoleCmd("sm_progress", Command_ToggleProgress);
     RegConsoleCmd("sm_timediff", Command_ToggleTimeDiff);   // <-- add
@@ -331,13 +333,9 @@ public any Native_GetProgressText(Handle plugin, int numParams)
     }
 
     // read cookie
-    bool showRank = false;    // default OFF
     bool showProgress = true;
 
     char value[4];
-    GetClientCookie(client, gRankDisplayCookie, value, sizeof(value));
-    if (strlen(value) > 0) showRank = StringToInt(value) != 0;
-
     GetClientCookie(client, gProgressDisplayCookie, value, sizeof(value));
     if (strlen(value) > 0) showProgress = StringToInt(value) != 0;
 
@@ -357,8 +355,8 @@ public any Native_GetProgressText(Handle plugin, int numParams)
     char text[128];
     text[0] = '\0';
 
-    if (showRank)
-        Format(text, sizeof(text), "Rank: %d / %d", rank, total);
+    // if (showRank)
+    //     Format(text, sizeof(text), "Rank: %d / %d", rank, total);
 
     if (showProgress)
     {

@@ -46,6 +46,100 @@ void ReadReplayHeader(const char[] path, int &tickCount)
     delete file;
 }
 
+void ReadReplayInfoForDebug(const char[] path, char[] mapName, int mapNameSize, int &format, int &type, int &course, int &tickCount, char[] alias, int aliasSize, int &time)
+{
+    File file = OpenFile(path, "rb");
+    if (file == null) {
+        mapName[0] = '\0';
+        alias[0] = '\0';
+        format = 0;
+        type = 0;
+        course = 0;
+        tickCount = 0;
+        time = 0;
+        return;
+    }
+
+    int magic; file.ReadInt32(magic);
+    int tempFormat; file.ReadInt8(tempFormat); format = tempFormat;
+    int tempType; file.ReadInt8(tempType); type = tempType;
+    
+    if (format == 1)
+    {
+        // Skip GOKZ version
+        char tmp[64];
+        ReadLPString(file, tmp, sizeof(tmp));
+        
+        // Map name
+        ReadLPString(file, mapName, mapNameSize);
+        
+        // Course
+        file.ReadInt32(course);
+        
+        // Skip mode, style
+        file.Seek(8, SEEK_CUR);
+        
+        // Time
+        file.ReadInt32(time);
+        
+        // Skip teleports, steamid
+        file.Seek(8, SEEK_CUR);
+        
+        // Skip SteamID2, IP
+        ReadLPString(file, tmp, sizeof(tmp));
+        ReadLPString(file, tmp, sizeof(tmp));
+        
+        // Alias
+        ReadLPString(file, alias, aliasSize);
+        
+        // Tick count
+        file.ReadInt32(tickCount);
+    }
+    else if (format == 2)
+    {
+        // Skip GOKZ version
+        char tmp[64];
+        ReadLPString(file, tmp, sizeof(tmp));
+        
+        // Map name
+        ReadLPString(file, mapName, mapNameSize);
+        
+        // Skip mapFileSize, ip, timestamp
+        file.Seek(12, SEEK_CUR);
+        
+        // Alias
+        ReadLPString(file, alias, aliasSize);
+        
+        // Skip: steamid, mode, style, sens, yaw, tickrate
+        file.Seek(4 + 1 + 1 + 4 + 4 + 4, SEEK_CUR);
+        
+        // Tick count
+        file.ReadInt32(tickCount);
+        
+        // Skip weapon, knife
+        file.Seek(8, SEEK_CUR);
+        
+        // Time and course
+        if (type == 0) {
+            file.ReadInt32(time);
+            file.ReadInt8(course);
+        } else {
+            time = 0;
+            course = 0;
+        }
+    }
+    else
+    {
+        mapName[0] = '\0';
+        alias[0] = '\0';
+        course = 0;
+        tickCount = 0;
+        time = 0;
+    }
+
+    delete file;
+}
+
 void ReadReplay(const char[] path)
 {
     if (gTickPositions == null)
@@ -53,11 +147,34 @@ void ReadReplay(const char[] path)
 
     LogMessage(" Reading Header from %s", path);
 
+    // Debug output if enabled
+    if (gCvarDebug.BoolValue)
+    {
+        char mapName[64];
+        char alias[64];
+        int format, type, course, tickCount, time;
+        ReadReplayInfoForDebug(path, mapName, sizeof(mapName), format, type, course, tickCount, alias, sizeof(alias), time);
+        
+        LogMessage("[DEBUG] Replay Info:");
+        LogMessage("  Path: %s", path);
+        LogMessage("  Format: %d, Type: %d", format, type);
+        LogMessage("  Map: %s, Course: %d", mapName, course);
+        LogMessage("  Player: %s", alias);
+        LogMessage("  Tick Count: %d", tickCount);
+        if (time > 0) {
+            float timeSeconds = float(time) / 1000.0;
+            LogMessage("  Time: %.3f seconds", timeSeconds);
+        }
+    }
+
     gTickPositions.Clear();
     bool ok = RP_ReadReplayInto(path, gTickPositions);
 
     if (ok) {
         LogMessage(" Loaded replay into global route, length=%d", gTickPositions.Length);
+        if (gCvarDebug.BoolValue) {
+            LogMessage("[DEBUG] Successfully loaded %d tick positions", gTickPositions.Length);
+        }
     } else {
         LogMessage(" Failed to load replay into global route: %s", path);
     }
@@ -162,19 +279,33 @@ bool FindBestReplayFilePath(char[] outPath, int maxlen)
     char dir[PLATFORM_MAX_PATH];
     Format(dir, sizeof(dir), REPLAY_DIR_FORMAT, map);
 
+    if (gCvarDebug.BoolValue)
+    {
+        LogMessage("[DEBUG] Searching for best replay in directory: %s", dir);
+        LogMessage("[DEBUG] Looking for map: %s, course: 0", map);
+    }
+
     DirectoryListing files = OpenDirectory(dir);
-    if (files == null) return false;
+    if (files == null)
+    {
+        if (gCvarDebug.BoolValue)
+            LogMessage("[DEBUG] Failed to open directory: %s", dir);
+        return false;
+    }
 
     int bestTicks = -1;
     char bestPath[PLATFORM_MAX_PATH];
     char fileName[PLATFORM_MAX_PATH];
     FileType type;
+    int checkedCount = 0;
+    int validCount = 0;
 
     while (files.GetNext(fileName, sizeof(fileName), type))
     {
         if (type != FileType_File || !StrContains(fileName, ".replay", false))
             continue;
 
+        checkedCount++;
         char fullPath[PLATFORM_MAX_PATH];
         Format(fullPath, sizeof(fullPath), "%s%s", dir, fileName);
 
@@ -182,24 +313,66 @@ bool FindBestReplayFilePath(char[] outPath, int maxlen)
         char mapName[64];
         ReadReplayHeader2(fullPath, tickCount, mapName, sizeof(mapName), course);
 
+        if (gCvarDebug.BoolValue)
+        {
+            LogMessage("[DEBUG] Checking replay: %s", fileName);
+            LogMessage("  Map: %s (current: %s), Course: %d, Ticks: %d", mapName, map, course, tickCount);
+        }
+
         // Must be current map & course 0
         if (!StrEqual(mapName, map, false) || course != 0)
+        {
+            if (gCvarDebug.BoolValue)
+                LogMessage("  -> Skipped (wrong map or course)");
             continue;
+        }
 
+        validCount++;
         if (bestTicks == -1 || tickCount < bestTicks)
         {
             bestTicks = tickCount;
             strcopy(bestPath, sizeof(bestPath), fullPath);
+            if (gCvarDebug.BoolValue)
+                LogMessage("  -> New best replay (ticks: %d)", tickCount);
         }
     }
 
     delete files;
 
-    if (bestTicks <= 30 * 60 * 128 && bestTicks > 0)
+    if (gCvarDebug.BoolValue)
+    {
+        LogMessage("[DEBUG] Replay search summary:");
+        LogMessage("  Files checked: %d", checkedCount);
+        LogMessage("  Valid replays found: %d", validCount);
+        LogMessage("  Best replay ticks: %d", bestTicks);
+    }
+
+    // Check replay size limit (convert minutes to ticks at 128 tickrate)
+    int maxTicks = RoundToFloor(gCvarMaxReplayTime.FloatValue * 60.0 * 128.0);
+    if (gCvarDebug.BoolValue && bestTicks > 0)
+    {
+        LogMessage("[DEBUG] Max replay time: %.1f minutes (%d ticks)", gCvarMaxReplayTime.FloatValue, maxTicks);
+    }
+
+    if (bestTicks <= maxTicks && bestTicks > 0)
     {
         strcopy(outPath, maxlen, bestPath);
         LogMessage("Best replay path: %s (tickCount = %d)", bestPath, bestTicks);
+        if (gCvarDebug.BoolValue)
+            LogMessage("[DEBUG] Selected best replay: %s", bestPath);
         return true;
+    }
+
+    if (bestTicks > maxTicks)
+    {
+        LogMessage("[Progress] Best replay exceeds size limit: %s (tickCount: %d, max: %d ticks / %.1f minutes)", 
+            bestPath, bestTicks, maxTicks, gCvarMaxReplayTime.FloatValue);
+        if (gCvarDebug.BoolValue)
+            LogMessage("[DEBUG] Replay rejected due to size limit");
+    }
+    else if (gCvarDebug.BoolValue)
+    {
+        LogMessage("[DEBUG] No valid replay found (bestTicks: %d)", bestTicks);
     }
 
     return false;
